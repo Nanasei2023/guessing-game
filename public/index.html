@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Guessing Game — Client</title>
+    <style>
+      body {
+        font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        max-width: 900px;
+        margin: 16px auto;
+        padding: 0 12px;
+      }
+      #top {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        margin-bottom: 12px;
+      }
+      #log {
+        border: 1px solid #ddd;
+        padding: 10px;
+        height: 300px;
+        overflow: auto;
+        background: #fafafa;
+      }
+      #players {
+        border: 1px solid #ddd;
+        padding: 10px;
+        margin-top: 12px;
+      }
+      .line {
+        margin: 4px 0;
+      }
+      .gm {
+        font-weight: 700;
+      }
+      .system {
+        color: #666;
+        font-size: 0.9em;
+      }
+      .error {
+        color: crimson;
+      }
+      .controls {
+        margin-top: 8px;
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      input,
+      button,
+      select {
+        padding: 6px 8px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Guessing Game — Demo Client</h1>
+
+    <div id="top">
+      <input id="name" placeholder="Your name" />
+      <input
+        id="sessionId"
+        placeholder="Session ID (leave empty to create new)"
+      />
+      <button id="create">Create Session</button>
+      <button id="join">Join Session</button>
+      <button id="leave">Leave Session</button>
+      <span id="sessionInfo"></span>
+    </div>
+
+    <div class="controls">
+      <input id="question" placeholder="GM: question" style="flex: 2" />
+      <input id="answer" placeholder="GM: answer" />
+      <button id="setQuestion">Set Question (GM)</button>
+      <button id="startGame">Start Game (GM)</button>
+    </div>
+
+    <div id="log"></div>
+
+    <div style="margin-top: 8px" class="controls">
+      <input id="guess" placeholder="Type your guess" style="flex: 1" />
+      <button id="sendGuess">Send Guess</button>
+      <button id="refreshState">Refresh State</button>
+    </div>
+
+    <div id="players">
+      <h3>Players</h3>
+      <div id="playersList"></div>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+      const socket = io();
+
+      const logEl = document.getElementById("log");
+      const playersList = document.getElementById("playersList");
+      const sessionInfo = document.getElementById("sessionInfo");
+
+      function log(text, cls) {
+        const d = document.createElement("div");
+        d.className = "line" + (cls ? " " + cls : "");
+        d.textContent = text;
+        logEl.appendChild(d);
+        logEl.scrollTop = logEl.scrollHeight;
+      }
+
+      function updatePlayers(players, gmId, inProgress) {
+        playersList.innerHTML = "";
+        players.forEach((p) => {
+          const d = document.createElement("div");
+          d.textContent = `${p.name} — ${p.score} pts${
+            inProgress ? " — attempts: " + p.attemptsLeft : ""
+          }`;
+          if (p.isGM || p.id === gmId) {
+            d.className = "gm";
+            d.textContent += " (GM)";
+          }
+          playersList.appendChild(d);
+        });
+      }
+
+      function setGuessEnabled(enabled) {
+        document.getElementById("guess").disabled = !enabled;
+        document.getElementById("sendGuess").disabled = !enabled;
+      }
+
+      // Buttons
+      document.getElementById("create").onclick = () => {
+        const name = document.getElementById("name").value || "You";
+        const desired = document.getElementById("sessionId").value.trim();
+        socket.emit("create_session", {
+          name,
+          sessionId: desired || undefined,
+        });
+      };
+
+      document.getElementById("join").onclick = () => {
+        const name = document.getElementById("name").value || "You";
+        const sessionId = document.getElementById("sessionId").value.trim();
+        if (!sessionId) {
+          alert("Enter a session ID to join.");
+          return;
+        }
+        socket.emit("join_session", { sessionId, name });
+      };
+
+      document.getElementById("leave").onclick = () => {
+        socket.emit("leave_session"); // no payload needed
+      };
+
+      document.getElementById("setQuestion").onclick = () => {
+        const q = document.getElementById("question").value;
+        const a = document.getElementById("answer").value;
+        socket.emit("set_question", { question: q, answer: a });
+      };
+
+      document.getElementById("startGame").onclick = () => {
+        socket.emit("start_game");
+      };
+
+      document.getElementById("sendGuess").onclick = () => {
+        const g = document.getElementById("guess").value;
+        if (!g) return;
+        socket.emit("guess", { guessText: g });
+        document.getElementById("guess").value = "";
+      };
+
+      document.getElementById("refreshState").onclick = () => {
+        socket.emit("get_session_state");
+      };
+
+      // Socket listeners
+      socket.on("connect", () => {
+        log("Connected to server as: " + socket.id, "system");
+      });
+
+      socket.on("session_created", ({ sessionId, gm }) => {
+        log(`Session created: ${sessionId}`, "system");
+        document.getElementById("sessionId").value = sessionId; // keep it in the UI
+        document.getElementById(
+          "sessionInfo"
+        ).textContent = `Session: ${sessionId}`;
+      });
+
+      socket.on("left_session", ({ sessionId }) => {
+        log(`You left session ${sessionId}`, "system");
+        // Clear session UI
+        document.getElementById("sessionId").value = "";
+        document.getElementById("sessionInfo").textContent = "";
+        document.getElementById("playersList").innerHTML = "";
+      });
+
+      /**socket.on("session_state", (state) => {
+              // update players list / UI
+              sessionInfo.textContent = state.sessionId
+                ? `Session: ${state.sessionId}`
+                : "";
+              updatePlayers(state.players, state.gm, state.inProgress);
+            });*/
+
+      socket.on("game_started", ({ question, duration }) => {
+        log(
+          `GAME STARTED — Question: ${question} (you have ${duration} seconds)`,
+          "system"
+        );
+        setGuessEnabled(true);
+      });
+
+      // When game ends
+      socket.on("game_ended", ({ reason, winner, answer }) => {
+        setGuessEnabled(false); // disable guessing UI
+
+        if (winner) {
+          log(
+            `GAME ENDED — Winner: ${winner.name}. Answer: ${answer}`,
+            "system"
+          );
+          if (winner.id === socket.id) {
+            log("You have won! +10 points 🎉", "system");
+          }
+        } else {
+          log(`GAME ENDED — No winner. Answer was: ${answer}`, "system");
+        }
+      });
+      socket.on("system_message", (msg) => {
+        log(msg, "system");
+      });
+
+      socket.on("error_message", (msg) => {
+        log("ERROR: " + msg, "error");
+      });
+
+      socket.on("game_started", ({ question, duration }) => {
+        log(
+          `GAME STARTED — Question: ${question} (you have ${duration} seconds)`,
+          "system"
+        );
+      });
+
+      socket.on("game_ended", ({ reason, winner, answer }) => {
+        if (winner) {
+          log(
+            `GAME ENDED — Winner: ${winner.name}. Answer: ${answer}`,
+            "system"
+          );
+          if (winner.id === socket.id) {
+            log("You have won! +10 points 🎉", "system");
+          }
+        } else {
+          log(`GAME ENDED — No winner. Answer was: ${answer}`, "system");
+        }
+      });
+
+      socket.on("session_state", (state) => {
+        // state: { sessionId, players, gm, inProgress, question, winner }
+        sessionInfo.textContent = state.sessionId
+          ? `Session: ${state.sessionId}`
+          : "";
+        updatePlayers(state.players, state.gm, state.inProgress);
+        if (state.inProgress && state.question) {
+          log(`Question: ${state.question}`, "system");
+        }
+      });
+
+      socket.on("disconnect", () => {
+        log("Disconnected from server", "system");
+        sessionInfo.textContent = "";
+        playersList.innerHTML = "";
+      });
+
+      // initial state request occasionally
+      setTimeout(() => {
+        socket.emit("get_session_state");
+      }, 500);
+    </script>
+  </body>
+</html>
